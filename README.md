@@ -1,0 +1,66 @@
+# 飞觅 Feimi
+
+飞觅是一个本地优先的中国国内机票比价 WebUI。它组合携程、去哪儿、飞猪与 Crawl4AI 辅助数据源，展示同航班的两次实时报价供人工复核，并支持自动转机、通程筛选、收藏夹和 iMessage 价格变动提醒。
+
+> 票价与余票以出票页面为准。使用前请自行确认目标平台的服务条款、robots.txt 与数据授权；验证码和登录必须由用户人工完成。
+
+## 主要功能
+
+- 城市与全国通航机场检索，支持可选转机地和无直飞自动转机
+- 普通转机至少预留 2 小时，通程保障航班最低 90 分钟，总行程不超过 16 小时
+- 携程、去哪儿等来源同航班两次报价并列展示，不要求两次价格完全一致
+- 按价格、总时长和转机次数综合排序，跨日方案默认折叠
+- 收藏夹、批量取消、收藏历史与历史删除
+- 每 30 分钟检查收藏航班；启用 iMessage 提醒时自动发送一条测试信息
+- 独立 Chrome 配置保存各 OTA 登录态，不读取或提交账号密码与 Cookie
+
+## 环境要求
+
+- macOS、Google Chrome、Node.js `>=22.13.0`
+- Python 3.12
+- 可选：`imsg`，用于 iMessage 价格提醒
+
+## WebUI 开发
+
+```bash
+npm install
+npm run build
+npm test
+npm run dev
+```
+
+实时抓价服务的安装与环境变量配置见 [crawler-service/README.md](crawler-service/README.md)。密钥只通过环境变量或本机 `secrets.env` 提供，仓库不包含任何密钥、手机号、Cookie 或浏览器资料。
+
+macOS LaunchAgent 文件是可移植模板。安装到当前账户前运行：
+
+```bash
+zsh scripts/install-launch-agents.sh
+```
+
+## 飞觅桌面价格提醒
+
+- 点击航班卡片上的“关注价格”，即可将当前人工选中的报价设为监控基准。
+- 填写 iMessage 手机号或 Apple ID 邮箱并启用提醒；首次启用会自动发送一条测试信息，发送失败时不会启用。
+- `com.feimi.price-monitor` 每 1800 秒调用一次本机抓价服务；只有同一来源、同一航班号和时刻的价格发生变化时才发送。
+- 收件地址与监控清单只保存在 `~/Library/Application Support/Feimi/runtime-state/price-alerts.json`，文件权限为 `0600`。
+- 消息发送使用 `imsg send --service imessage`，不会自动改用可能计费的短信服务。
+
+## 快速关闭
+
+- WebUI 顶栏的“退出飞觅”会停止网页服务、实时抓价、价格提醒及三个隔离登录窗口，并自动离开当前页面。
+- `scripts/feimi-stop.sh` 只卸载 `com.feimi.*` 用户服务，并仅匹配飞觅专用 Chrome profile；不会结束普通 Chrome 会话。
+- 浏览器可能不允许网页自行关闭普通 Chrome 窗口；此时关闭空白标签页即可。再次启动飞觅会恢复服务。
+
+## 隔离的 OTA 登录窗口
+
+- WebUI 内置携程、去哪儿、美团三个入口，分别打开独立 Chrome 用户目录与本机调试端口。
+- 三个平台的登录状态互不共享；飞觅只读取航班搜索响应，不读取或保存账号密码。
+- 去哪儿已接入登录态实时比价；美团价格适配器完成验证前不会把页面内容当作报价。
+
+## 安全说明
+
+- `.env*`、运行状态、Chrome 登录资料、日志与构建产物均已排除在版本控制之外。
+- API 密钥只从 `FLYAI_API_KEY`、`DASHSCOPE_API_KEY` 等环境变量读取。
+- 项目不会把 iMessage 自动降级为可能计费的短信。
+
+核心抓取框架：[unclecode/crawl4ai](https://github.com/unclecode/crawl4ai)

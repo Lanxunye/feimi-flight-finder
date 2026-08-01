@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.feimi.qunar-browser</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/Google Chrome.app/Contents/MacOS/Google Chrome</string>
+    <string>--remote-debugging-address=127.0.0.1</string>
+    <string>--remote-debugging-port=9224</string>
+    <string>--user-data-dir=__FEIMI_ROOT__/qunar-chrome-profile</string>
+    <string>--no-first-run</string>
+    <string>--no-default-browser-check</string>
+    <string>https://flight.qunar.com/</string>
+  </array>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>StandardOutPath</key>
+  <string>__FEIMI_ROOT__/logs/qunar-browser.log</string>
+  <key>StandardErrorPath</key>
+  <string>__FEIMI_ROOT__/logs/qunar-browser-error.log</string>
+</dict>
+</plist>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.feimi.web</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE_BIN__</string>
+    <string>__FEIMI_ROOT__/web/node_modules/vinext/dist/cli.js</string>
+    <string>start</string>
+    <string>--hostname</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>3000</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__FEIMI_ROOT__/web</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>FLIGHT_CRAWLER_URL</key>
+    <string>http://127.0.0.1:8001</string>
+    <key>PATH</key>
+    <string>__NODE_DIR__:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__FEIMI_ROOT__/logs/web.log</string>
+  <key>StandardErrorPath</key>
+  <string>__FEIMI_ROOT__/logs/web-error.log</string>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+</dict>
+</plist>

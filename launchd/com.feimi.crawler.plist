@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.feimi.crawler</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__FEIMI_ROOT__/crawler/start-runtime.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__FEIMI_ROOT__/crawler</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>FLYAI_NODE_PATH</key>
+    <string>__NODE_BIN__</string>
+    <key>FEIMI_RUNTIME_STATE_DIR</key>
+    <string>__FEIMI_ROOT__/runtime-state</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__FEIMI_ROOT__/logs/crawler.log</string>
+  <key>StandardErrorPath</key>
+  <string>__FEIMI_ROOT__/logs/crawler-error.log</string>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+</dict>
+</plist>

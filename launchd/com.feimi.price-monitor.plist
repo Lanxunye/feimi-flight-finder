@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.feimi.price-monitor</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/curl</string>
+    <string>--fail</string>
+    <string>--silent</string>
+    <string>--show-error</string>
+    <string>--max-time</string>
+    <string>1500</string>
+    <string>--request</string>
+    <string>POST</string>
+    <string>http://127.0.0.1:8001/api/alerts/check</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>1800</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__FEIMI_ROOT__/logs/price-monitor.log</string>
+  <key>StandardErrorPath</key>
+  <string>__FEIMI_ROOT__/logs/price-monitor-error.log</string>
+</dict>
+</plist>
