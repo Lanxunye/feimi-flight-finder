@@ -35,7 +35,6 @@ wait_for_url() {
 
 ensure_agent "com.feimi.crawler" "$LAUNCH_AGENT_DIR/com.feimi.crawler.plist"
 ensure_agent "com.feimi.web" "$LAUNCH_AGENT_DIR/com.feimi.web.plist"
-ensure_agent "com.feimi.ctrip-browser" "$LAUNCH_AGENT_DIR/com.feimi.ctrip-browser.plist"
 ensure_agent "com.feimi.price-monitor" "$LAUNCH_AGENT_DIR/com.feimi.price-monitor.plist"
 
 if ! wait_for_url "$CRAWLER_URL/health" 25; then

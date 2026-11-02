@@ -77,7 +77,12 @@ type AlertStatus = {
   lastError?: string | null;
   error?: string;
   autoTestSent?: boolean;
+  testSent?: boolean;
+  activeRecipientId?: string | null;
+  recipients?: AlertRecipient[];
+  totalWatchCount?: number;
 };
+type AlertRecipient = { id: string; masked: string; watchCount: number };
 type FavoriteWatch = {
   id: string;
   historyId?: string;
@@ -86,14 +91,15 @@ type FavoriteWatch = {
   destination: string;
   date: string;
   provider: string;
-  segments: Array<{ flightNo: string; from: { city: string; code: string }; to: { city: string; code: string } }>;
+  segments: Array<{ flightNo: string; departTime: string; arriveTime: string; from: { city: string; code: string }; to: { city: string; code: string } }>;
   lastPrice: number;
   totalMinutes: number;
   transferMinutes?: number | null;
   createdAt: string;
   removedAt?: string;
+  recipientId?: string;
 };
-type FavoriteFolder = { favorites: FavoriteWatch[]; history: FavoriteWatch[] };
+type FavoriteFolder = { recipientId?: string | null; favorites: FavoriteWatch[]; history: FavoriteWatch[] };
 
 function localDate(offset = 2) {
   const date = new Date();
@@ -159,6 +165,7 @@ export function FlightFinder() {
   const [appliedThroughOnly, setAppliedThroughOnly] = useState(false);
   const [searchContext, setSearchContext] = useState<SearchContext | null>(null);
   const [alertStatus, setAlertStatus] = useState<AlertStatus | null>(null);
+  const [activeRecipientId, setActiveRecipientId] = useState("");
   const [alertPanelOpen, setAlertPanelOpen] = useState(false);
   const [alertRecipient, setAlertRecipient] = useState("");
   const [alertEnabled, setAlertEnabled] = useState(false);
@@ -169,10 +176,12 @@ export function FlightFinder() {
   const [favoriteSelection, setFavoriteSelection] = useState<string[]>([]);
   const [favoriteFolderBusy, setFavoriteFolderBusy] = useState(false);
   const [favoriteFolderFeedback, setFavoriteFolderFeedback] = useState("");
+  const [favoriteTargets, setFavoriteTargets] = useState<Record<string, string>>({});
 
-  const refreshFavoriteFolder = useCallback(async () => {
+  const refreshFavoriteFolder = useCallback(async (recipientId?: string) => {
     try {
-      const response = await fetch("/api/alerts/favorites", { cache: "no-store" });
+      const query = recipientId ? `?recipientId=${encodeURIComponent(recipientId)}` : "";
+      const response = await fetch(`/api/alerts/favorites${query}`, { cache: "no-store" });
       if (!response.ok) return;
       applyFavoriteFolder(await response.json() as FavoriteFolder);
     } catch {
@@ -196,6 +205,7 @@ export function FlightFinder() {
       .then((status: AlertStatus) => {
         setAlertStatus(status);
         setAlertEnabled(Boolean(status.enabled));
+        setActiveRecipientId(status.activeRecipientId || "");
       })
       .catch(() => setAlertStatus(null));
     void refreshFavoriteFolder();
@@ -362,12 +372,13 @@ export function FlightFinder() {
           purchaseUrl: offer.purchaseUrl,
           totalMinutes: offer.totalMinutes,
           transferMinutes: offer.transferMinutes,
+          recipientId: activeRecipientId || undefined,
         }),
       });
       const status = await response.json() as AlertStatus;
       if (response.ok) {
         setAlertStatus(status);
-        void refreshFavoriteFolder();
+        void refreshFavoriteFolder(activeRecipientId);
       }
     } catch {
       // The desktop alert service is optional; local favorite pinning still works.
@@ -376,6 +387,11 @@ export function FlightFinder() {
 
   function toggleFavorite(offer: Offer) {
     const adding = !favorites.includes(offer.id);
+    if (adding && !activeRecipientId) {
+      setAlertPanelOpen(true);
+      setAlertFeedback("请先添加并选择一个 iMessage 提醒号码，再收藏机票。");
+      return;
+    }
     setFavorites((current) => {
       const next = current.includes(offer.id) ? current.filter((item) => item !== offer.id) : [...current, offer.id];
       localStorage.setItem("flight-favorites", JSON.stringify(next));
@@ -385,11 +401,12 @@ export function FlightFinder() {
       const selectedPrice = activePriceCheck(offer, selectedChecks)?.price ?? offer.price;
       void registerFavorite(offer, searchContext, selectedPrice);
     } else if (!adding) {
-      void fetch(`/api/alerts/watch?id=${encodeURIComponent(offer.id)}`, { method: "DELETE" })
+      const recipientQuery = activeRecipientId ? `&recipientId=${encodeURIComponent(activeRecipientId)}` : "";
+      void fetch(`/api/alerts/watch?id=${encodeURIComponent(offer.id)}${recipientQuery}`, { method: "DELETE" })
         .then((response) => response.json())
         .then((status: AlertStatus) => {
           setAlertStatus(status);
-          void refreshFavoriteFolder();
+          void refreshFavoriteFolder(activeRecipientId);
         })
         .catch(() => undefined);
     }
@@ -409,10 +426,11 @@ export function FlightFinder() {
     setFavoriteFolderFeedback("");
     try {
       await Promise.all(favoriteSelection.map(async (offerId) => {
-        const response = await fetch(`/api/alerts/watch?id=${encodeURIComponent(offerId)}`, { method: "DELETE" });
+        const recipientQuery = activeRecipientId ? `&recipientId=${encodeURIComponent(activeRecipientId)}` : "";
+        const response = await fetch(`/api/alerts/watch?id=${encodeURIComponent(offerId)}${recipientQuery}`, { method: "DELETE" });
         if (!response.ok) throw new Error("取消收藏失败");
       }));
-      await refreshFavoriteFolder();
+      await refreshFavoriteFolder(activeRecipientId);
       setFavoriteFolderFeedback(`已取消 ${favoriteSelection.length} 个收藏，记录已移入收藏历史。`);
     } catch (reason) {
       setFavoriteFolderFeedback(reason instanceof Error ? reason.message : "取消收藏失败");
@@ -436,6 +454,127 @@ export function FlightFinder() {
     }
   }
 
+  function applyAlertStatus(status: AlertStatus) {
+    setAlertStatus(status);
+    setAlertEnabled(Boolean(status.enabled));
+    setActiveRecipientId(status.activeRecipientId || "");
+  }
+
+  async function addAlertRecipient() {
+    const recipient = alertRecipient.trim();
+    if (!recipient) return;
+    setAlertBusy(true);
+    setAlertFeedback("");
+    try {
+      const response = await fetch("/api/alerts/recipients", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ recipient }),
+      });
+      const status = await response.json() as AlertStatus;
+      if (!response.ok) throw new Error(status.error || "添加提醒号码失败");
+      applyAlertStatus(status);
+      setAlertRecipient("");
+      await refreshFavoriteFolder(status.activeRecipientId || undefined);
+      setAlertFeedback(status.testSent ? "号码已添加，测试 iMessage 已发送" : "号码已存在，已切换到该号码");
+    } catch (reason) {
+      setAlertFeedback(reason instanceof Error ? reason.message : "添加提醒号码失败");
+    } finally {
+      setAlertBusy(false);
+    }
+  }
+
+  async function selectAlertRecipient(recipientId: string) {
+    setAlertBusy(true);
+    setAlertFeedback("");
+    try {
+      const response = await fetch("/api/alerts/status", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: alertEnabled, activeRecipientId: recipientId }),
+      });
+      const status = await response.json() as AlertStatus;
+      if (!response.ok) throw new Error(status.error || "切换号码失败");
+      applyAlertStatus(status);
+      await refreshFavoriteFolder(recipientId);
+      setFavoriteSelection([]);
+    } catch (reason) {
+      setAlertFeedback(reason instanceof Error ? reason.message : "切换号码失败");
+    } finally {
+      setAlertBusy(false);
+    }
+  }
+
+  async function removeAlertRecipient(recipientId: string) {
+    const recipient = alertStatus?.recipients?.find((item) => item.id === recipientId);
+    const target = alertStatus?.recipients?.find((item) => item.id !== recipientId);
+    const moveNote = recipient?.watchCount ? `该号码的 ${recipient.watchCount} 个收藏将移动到 ${target?.masked || "其他号码"}。` : "";
+    if (!window.confirm(`确定移除 ${recipient?.masked || "此号码"}？${moveNote}`)) return;
+    setAlertBusy(true);
+    setAlertFeedback("");
+    try {
+      const response = await fetch(`/api/alerts/recipients/${encodeURIComponent(recipientId)}`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...(target ? { moveToRecipientId: target.id } : {}) }),
+      });
+      const status = await response.json() as AlertStatus;
+      if (!response.ok) throw new Error(status.error || "移除号码失败");
+      applyAlertStatus(status);
+      await refreshFavoriteFolder(status.activeRecipientId || undefined);
+      setAlertFeedback(target && recipient?.watchCount ? `号码已移除，收藏已移动到 ${target.masked}` : "号码已移除");
+    } catch (reason) {
+      setAlertFeedback(reason instanceof Error ? reason.message : "移除号码失败");
+    } finally {
+      setAlertBusy(false);
+    }
+  }
+
+  async function moveFavoriteToRecipient(offerId: string, recipientId: string) {
+    setFavoriteFolderBusy(true);
+    setFavoriteFolderFeedback("");
+    try {
+      const response = await fetch(`/api/alerts/watch/${encodeURIComponent(offerId)}/recipient`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ recipientId, sourceRecipientId: activeRecipientId }),
+      });
+      const status = await response.json() as AlertStatus;
+      if (!response.ok) throw new Error(status.error || "移动收藏失败");
+      setAlertStatus(status);
+      await refreshFavoriteFolder(activeRecipientId);
+      setFavoriteFolderFeedback("收藏机票已移动到所选提醒号码。");
+    } catch (reason) {
+      setFavoriteFolderFeedback(reason instanceof Error ? reason.message : "移动收藏失败");
+    } finally {
+      setFavoriteFolderBusy(false);
+    }
+  }
+
+  async function copyFavoriteToRecipient(offerId: string, targetRecipientId: string) {
+    if (!activeRecipientId || !targetRecipientId || targetRecipientId === activeRecipientId) return;
+    setFavoriteFolderBusy(true);
+    setFavoriteFolderFeedback("");
+    try {
+      const response = await fetch(`/api/alerts/watch/${encodeURIComponent(offerId)}/copy`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceRecipientId: activeRecipientId, targetRecipientId }),
+      });
+      const result = await response.json() as AlertStatus & { copied?: boolean };
+      if (!response.ok) throw new Error(result.error || "复制收藏失败");
+      setAlertStatus(result);
+      const target = result.recipients?.find((recipient) => recipient.id === targetRecipientId);
+      setFavoriteFolderFeedback(result.copied
+        ? `已复制到 ${target?.masked || "所选号码"}，当前号码的收藏继续保留。`
+        : `${target?.masked || "所选号码"} 已收藏该航班，无需重复复制。`);
+    } catch (reason) {
+      setFavoriteFolderFeedback(reason instanceof Error ? reason.message : "复制收藏失败");
+    } finally {
+      setFavoriteFolderBusy(false);
+    }
+  }
+
   async function saveAlertSettings() {
     setAlertBusy(true);
     setAlertFeedback("");
@@ -445,13 +584,12 @@ export function FlightFinder() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           enabled: alertEnabled,
-          ...(alertRecipient.trim() ? { recipient: alertRecipient.trim() } : {}),
+          ...(activeRecipientId ? { activeRecipientId } : {}),
         }),
       });
       const status = await response.json() as AlertStatus;
       if (!response.ok) throw new Error(status.error || "保存失败");
-      setAlertStatus(status);
-      setAlertRecipient("");
+      applyAlertStatus(status);
       setAlertFeedback(alertEnabled
         ? status.autoTestSent
           ? "已启用并自动发送测试 iMessage，请检查“信息”应用"
@@ -468,7 +606,11 @@ export function FlightFinder() {
     setAlertBusy(true);
     setAlertFeedback("");
     try {
-      const response = await fetch("/api/alerts/test", { method: "POST" });
+      const response = await fetch("/api/alerts/test", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...(activeRecipientId ? { recipientId: activeRecipientId } : {}) }),
+      });
       const status = await response.json() as AlertStatus;
       if (!response.ok) throw new Error(status.error || "测试信息发送失败");
       setAlertStatus(status);
@@ -714,17 +856,22 @@ export function FlightFinder() {
                 <p>在线页面无法访问这台 Mac 的“信息”应用。请从桌面的“飞觅机票”打开后配置。</p>
               ) : (
                 <>
-                  <label className="alert-recipient">
-                    <span>iMessage 收件地址</span>
-                    <input
-                      value={alertRecipient}
-                      onChange={(event) => setAlertRecipient(event.target.value)}
-                      placeholder={alertStatus?.recipientMasked || "+86 手机号或 Apple ID 邮箱"}
-                      autoComplete="off"
-                      inputMode="email"
-                    />
-                    <small>仅保存在本机；建议手机号包含 +86 国家区号</small>
-                  </label>
+                  <div className="recipient-manager">
+                    <span>提醒号码与对应收藏夹</span>
+                    <div className="recipient-tabs">
+                      {(alertStatus?.recipients || []).map((recipient) => (
+                        <div className={recipient.id === activeRecipientId ? "selected" : ""} key={recipient.id}>
+                          <button type="button" onClick={() => void selectAlertRecipient(recipient.id)} disabled={alertBusy}>{recipient.masked}<small>{recipient.watchCount} 个收藏</small></button>
+                          <button type="button" aria-label={`移除提醒号码 ${recipient.masked}`} onClick={() => void removeAlertRecipient(recipient.id)} disabled={alertBusy}>×</button>
+                        </div>
+                      ))}
+                    </div>
+                    <label className="alert-recipient-add">
+                      <input value={alertRecipient} onChange={(event) => setAlertRecipient(event.target.value)} placeholder="+86 手机号或 Apple ID 邮箱" autoComplete="off" inputMode="email" />
+                      <button type="button" onClick={addAlertRecipient} disabled={alertBusy || !alertRecipient.trim()}>添加并测试</button>
+                    </label>
+                    <small>每个号码拥有独立收藏夹；新增号码会立即发送测试信息。</small>
+                  </div>
                   <label className={`alert-enable ${alertEnabled ? "selected" : ""}`}>
                     <input type="checkbox" checked={alertEnabled} onChange={(event) => setAlertEnabled(event.target.checked)} />
                     <span aria-hidden="true"><i /></span>
@@ -737,7 +884,8 @@ export function FlightFinder() {
                   </div>
                   <div className="alert-privacy">
                     <span>{alertStatus?.imsgAvailable ? "✓ imsg 已连接" : "等待 imsg 安装"}</span>
-                    <span>{alertStatus?.recipientConfigured ? `收件人 ${alertStatus.recipientMasked}` : "尚未设置收件人"}</span>
+                    <span>{alertStatus?.recipientConfigured ? `当前号码 ${alertStatus.recipientMasked}` : "尚未添加提醒号码"}</span>
+                    <span>共 {alertStatus?.recipients?.length || 0} 个号码 · {alertStatus?.totalWatchCount || 0} 个收藏</span>
                     {alertStatus?.lastCheckAt && <span>上次检查 {new Date(alertStatus.lastCheckAt).toLocaleString("zh-CN")}</span>}
                   </div>
                   {alertFeedback && <p className="alert-feedback" role="status">{alertFeedback}</p>}
@@ -749,7 +897,7 @@ export function FlightFinder() {
           {favoriteFolderOpen && (
             <div className="favorite-folder">
               <div className="favorite-folder-heading">
-                <div><strong>我的收藏机票</strong><small>可批量选择、反选后取消收藏；取消的航班会保留在历史中。</small></div>
+                <div><strong>{alertStatus?.recipientMasked || "当前号码"} 的收藏机票</strong><small>可将单张机票复制或移动到其他号码；复制后两个号码会独立监控。</small></div>
                 <div className="favorite-folder-actions">
                   <button type="button" onClick={() => setFavoriteSelection(favoriteFolder.favorites.map((item) => item.clientOfferId))} disabled={!favoriteFolder.favorites.length || favoriteFolderBusy}>全选</button>
                   <button type="button" onClick={() => setFavoriteSelection((current) => favoriteFolder.favorites.map((item) => item.clientOfferId).filter((id) => !current.includes(id)))} disabled={!favoriteFolder.favorites.length || favoriteFolderBusy}>反选</button>
@@ -758,13 +906,25 @@ export function FlightFinder() {
               </div>
               {favoriteFolder.favorites.length ? (
                 <div className="favorite-list">
-                  {favoriteFolder.favorites.map((item) => (
-                    <label className="favorite-row" key={item.id}>
-                      <input type="checkbox" checked={favoriteSelection.includes(item.clientOfferId)} onChange={() => setFavoriteSelection((current) => current.includes(item.clientOfferId) ? current.filter((id) => id !== item.clientOfferId) : [...current, item.clientOfferId])} />
-                      <div><strong>{item.segments[0]?.from.city} → {item.segments.at(-1)?.to.city}</strong><small>{item.date} · {item.provider} · {item.segments.map((segment) => segment.flightNo).join(" + ")}</small></div>
-                      <span>¥{item.lastPrice}</span><em>全程 {formatDuration(item.totalMinutes)}</em>
-                    </label>
-                  ))}
+                  {favoriteFolder.favorites.map((item) => {
+                    const otherRecipients = (alertStatus?.recipients || []).filter((recipient) => recipient.id !== activeRecipientId);
+                    const selectedTarget = favoriteTargets[item.id] || otherRecipients[0]?.id || "";
+                    return (
+                    <div className="favorite-row" key={item.id}>
+                      <input aria-label={`选择 ${item.segments.map((segment) => segment.flightNo).join("+")}`} type="checkbox" checked={favoriteSelection.includes(item.clientOfferId)} onChange={() => setFavoriteSelection((current) => current.includes(item.clientOfferId) ? current.filter((id) => id !== item.clientOfferId) : [...current, item.clientOfferId])} />
+                      <div><strong>{item.segments[0]?.from.city} → {item.segments.at(-1)?.to.city}</strong><small>{item.date} · {item.provider} · {item.segments.map((segment) => segment.flightNo).join(" + ")}</small><small className="favorite-time">出发 {item.segments[0]?.departTime || "--:--"} · 到达 {item.segments.at(-1)?.arriveTime || "--:--"}</small></div>
+                      <span>¥{item.lastPrice}</span>
+                      {otherRecipients.length ? (
+                        <div className="favorite-transfer-actions">
+                          <select aria-label={`${item.segments.map((segment) => segment.flightNo).join("+")} 的目标提醒号码`} value={selectedTarget} onChange={(event) => setFavoriteTargets((current) => ({ ...current, [item.id]: event.target.value }))} disabled={favoriteFolderBusy}>
+                            {otherRecipients.map((recipient) => <option key={recipient.id} value={recipient.id}>{recipient.masked}</option>)}
+                          </select>
+                          <button type="button" onClick={() => void copyFavoriteToRecipient(item.clientOfferId, selectedTarget)} disabled={favoriteFolderBusy || !selectedTarget}>复制</button>
+                          <button type="button" onClick={() => void moveFavoriteToRecipient(item.clientOfferId, selectedTarget)} disabled={favoriteFolderBusy || !selectedTarget}>移动</button>
+                        </div>
+                      ) : <em>全程 {formatDuration(item.totalMinutes)}</em>}
+                    </div>
+                  );})}
                 </div>
               ) : <p className="favorite-empty">还没有收藏机票。搜索结果中点击“关注价格”即可加入。</p>}
               <div className="favorite-history-heading"><strong>收藏历史</strong><span>{favoriteFolder.history.length} 条</span></div>
@@ -772,7 +932,7 @@ export function FlightFinder() {
                 <div className="favorite-list history-list">
                   {favoriteFolder.history.map((item) => (
                     <div className="favorite-row history-row" key={item.historyId}>
-                      <div><strong>{item.segments[0]?.from.city} → {item.segments.at(-1)?.to.city}</strong><small>{item.date} · {item.segments.map((segment) => segment.flightNo).join(" + ")} · {item.removedAt ? `取消于 ${new Date(item.removedAt).toLocaleDateString("zh-CN")}` : "已取消"}</small></div>
+                      <div><strong>{item.segments[0]?.from.city} → {item.segments.at(-1)?.to.city}</strong><small>{item.date} · {item.segments.map((segment) => segment.flightNo).join(" + ")} · {item.removedAt ? `取消于 ${new Date(item.removedAt).toLocaleDateString("zh-CN")}` : "已取消"}</small><small className="favorite-time">出发 {item.segments[0]?.departTime || "--:--"} · 到达 {item.segments.at(-1)?.arriveTime || "--:--"}</small></div>
                       <span>¥{item.lastPrice}</span>
                       <button type="button" onClick={() => item.historyId && void deleteFavoriteHistory(item.historyId)} disabled={favoriteFolderBusy}>删除记录</button>
                     </div>

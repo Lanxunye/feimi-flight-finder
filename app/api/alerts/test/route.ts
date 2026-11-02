@@ -1,7 +1,8 @@
+import { NextRequest } from "next/server";
 import { alertProxy } from "../proxy";
 
 export const dynamic = "force-dynamic";
 
-export async function POST() {
-  return alertProxy("/api/alerts/test", { method: "POST" });
+export async function POST(request: NextRequest) {
+  return alertProxy("/api/alerts/test", { method: "POST", body: await request.text() || "{}" });
 }

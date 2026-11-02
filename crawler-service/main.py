@@ -37,19 +37,24 @@ from qunar_session import (
 )
 from price_alerts import (
     CHECK_INTERVAL_MINUTES,
+    add_recipient,
+    recipient_address,
     flight_key,
     imsg_path,
     load_state as load_alert_state,
     normalize_recipient,
     now_iso as alert_now_iso,
     delete_history_item,
+    copy_watch,
     favorite_records,
     price_change_message,
     public_status as public_alert_status,
     remove_watch,
+    remove_recipient,
     save_state as save_alert_state,
     send_imessage,
     upsert_watch,
+    move_watch,
 )
 
 app = FastAPI(title="Feimi Crawl4AI adapter", version="1.0.0")
@@ -138,11 +143,35 @@ class AlertWatchRequest(BaseModel):
     purchase_url: str = Field(alias="purchaseUrl", min_length=1, max_length=2048)
     total_minutes: int = Field(alias="totalMinutes", gt=0, le=MAX_TOTAL_MINUTES)
     transfer_minutes: int | None = Field(default=None, alias="transferMinutes", ge=90)
+    recipient_id: str | None = Field(default=None, alias="recipientId", min_length=16, max_length=64)
 
 
 class AlertSettingsRequest(BaseModel):
     enabled: bool
     recipient: str | None = Field(default=None, max_length=160)
+    active_recipient_id: str | None = Field(default=None, alias="activeRecipientId", min_length=16, max_length=64)
+
+
+class AlertRecipientRequest(BaseModel):
+    recipient: str = Field(min_length=7, max_length=160)
+
+
+class AlertRecipientRemovalRequest(BaseModel):
+    move_to_recipient_id: str | None = Field(default=None, alias="moveToRecipientId", min_length=16, max_length=64)
+
+
+class AlertWatchRecipientRequest(BaseModel):
+    recipient_id: str = Field(alias="recipientId", min_length=16, max_length=64)
+    source_recipient_id: str | None = Field(default=None, alias="sourceRecipientId", min_length=16, max_length=64)
+
+
+class AlertWatchCopyRequest(BaseModel):
+    source_recipient_id: str = Field(alias="sourceRecipientId", min_length=16, max_length=64)
+    target_recipient_id: str = Field(alias="targetRecipientId", min_length=16, max_length=64)
+
+
+class AlertTestRequest(BaseModel):
+    recipient_id: str | None = Field(default=None, alias="recipientId", min_length=16, max_length=64)
 
 
 def provider_url(origin: str, destination: str, date: str) -> str:
@@ -817,21 +846,27 @@ async def update_alert_settings(payload: AlertSettingsRequest) -> dict[str, Any]
         was_enabled = bool(state["settings"].get("enabled"))
         if payload.recipient is not None and payload.recipient.strip():
             try:
-                state["settings"]["recipient"] = normalize_recipient(payload.recipient)
+                recipient, _ = add_recipient(state, normalize_recipient(payload.recipient))
+                state["settings"]["activeRecipientId"] = recipient["id"]
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
-        if payload.enabled and not state["settings"].get("recipient"):
-            raise HTTPException(status_code=400, detail="启用提醒前请填写 iMessage 收件手机号或 Apple ID 邮箱")
+        if payload.active_recipient_id is not None:
+            if not recipient_address(state, payload.active_recipient_id):
+                raise HTTPException(status_code=400, detail="提醒号码不存在")
+            state["settings"]["activeRecipientId"] = payload.active_recipient_id
+        if payload.enabled and not state["recipients"]:
+            raise HTTPException(status_code=400, detail="启用提醒前请至少添加一个 iMessage 收件号码")
         auto_test_sent = False
         if payload.enabled and not was_enabled:
             if imsg_path() is None:
                 raise HTTPException(status_code=503, detail="imsg 尚未安装完成，无法启用提醒")
             try:
-                await asyncio.to_thread(
-                    send_imessage,
-                    str(state["settings"]["recipient"]),
-                    "【飞觅测试】价格提醒已成功启用。此后仅在收藏航班价格上涨或下降时通知。",
-                )
+                for item in state["recipients"]:
+                    await asyncio.to_thread(
+                        send_imessage,
+                        str(item["address"]),
+                        "【飞觅测试】价格提醒已成功启用。此号码只接收其收藏航班的价格变化。",
+                    )
             except Exception as error:
                 state["settings"]["enabled"] = False
                 state["status"]["lastError"] = f"启用测试发送失败：{type(error).__name__}"
@@ -843,6 +878,42 @@ async def update_alert_settings(payload: AlertSettingsRequest) -> dict[str, Any]
         state["status"]["lastError"] = None
         save_alert_state(state)
         return {"autoTestSent": auto_test_sent, **public_alert_status(state)}
+
+
+@app.post("/api/alerts/recipients")
+async def create_alert_recipient(payload: AlertRecipientRequest) -> dict[str, Any]:
+    async with ALERTS_LOCK:
+        state = load_alert_state()
+        try:
+            recipient, created = add_recipient(state, payload.recipient)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if created:
+            if imsg_path() is None:
+                raise HTTPException(status_code=503, detail="imsg 尚未安装完成，无法验证新号码")
+            try:
+                await asyncio.to_thread(
+                    send_imessage,
+                    str(recipient["address"]),
+                    "【飞觅测试】此号码已接入价格提醒。收藏航班将按号码分别管理。",
+                )
+            except Exception as error:
+                raise HTTPException(status_code=503, detail="新号码测试信息发送失败，未保存该号码") from error
+            state["status"]["lastSentAt"] = alert_now_iso()
+        save_alert_state(state)
+        return {"added": created, "testSent": created, **public_alert_status(state)}
+
+
+@app.delete("/api/alerts/recipients/{recipient_id}")
+async def delete_alert_recipient(recipient_id: str, payload: AlertRecipientRemovalRequest | None = None) -> dict[str, Any]:
+    async with ALERTS_LOCK:
+        state = load_alert_state()
+        try:
+            removed = remove_recipient(state, recipient_id, payload.move_to_recipient_id if payload else None)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        save_alert_state(state)
+        return {"removed": removed, **public_alert_status(state)}
 
 
 @app.post("/api/alerts/watch")
@@ -860,24 +931,58 @@ async def add_alert_watch(payload: AlertWatchRequest) -> dict[str, Any]:
     data = payload.model_dump(by_alias=True)
     async with ALERTS_LOCK:
         state = load_alert_state()
-        watch = upsert_watch(state, data)
+        try:
+            watch = upsert_watch(state, data)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         save_alert_state(state)
         return {"watchId": watch["id"], **public_alert_status(state)}
 
 
 @app.delete("/api/alerts/watch/{client_offer_id}")
-async def delete_alert_watch(client_offer_id: str) -> dict[str, Any]:
+async def delete_alert_watch(client_offer_id: str, recipient_id: str | None = None) -> dict[str, Any]:
     async with ALERTS_LOCK:
         state = load_alert_state()
-        removed = remove_watch(state, client_offer_id)
+        removed = remove_watch(state, client_offer_id, recipient_id)
         save_alert_state(state)
         return {"removed": removed, **public_alert_status(state)}
 
 
-@app.get("/api/alerts/favorites")
-async def list_alert_favorites() -> dict[str, Any]:
+@app.put("/api/alerts/watch/{client_offer_id}/recipient")
+async def move_alert_watch(client_offer_id: str, payload: AlertWatchRecipientRequest) -> dict[str, Any]:
     async with ALERTS_LOCK:
-        return favorite_records(load_alert_state())
+        state = load_alert_state()
+        try:
+            moved = move_watch(state, client_offer_id, payload.recipient_id, payload.source_recipient_id)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        save_alert_state(state)
+        return {"moved": moved, **public_alert_status(state)}
+
+
+@app.put("/api/alerts/watch/{client_offer_id}/copy")
+async def copy_alert_watch(client_offer_id: str, payload: AlertWatchCopyRequest) -> dict[str, Any]:
+    async with ALERTS_LOCK:
+        state = load_alert_state()
+        try:
+            copied_watch, copied = copy_watch(
+                state,
+                client_offer_id,
+                payload.source_recipient_id,
+                payload.target_recipient_id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if copied_watch is None:
+            raise HTTPException(status_code=404, detail="当前号码中未找到该收藏航班")
+        save_alert_state(state)
+        return {"copied": copied, "watchId": copied_watch["id"], **public_alert_status(state)}
+
+
+@app.get("/api/alerts/favorites")
+async def list_alert_favorites(recipient_id: str | None = None) -> dict[str, Any]:
+    async with ALERTS_LOCK:
+        return favorite_records(load_alert_state(), recipient_id)
 
 
 @app.delete("/api/alerts/history/{history_id}")
@@ -890,12 +995,13 @@ async def delete_alert_history(history_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/alerts/test")
-async def test_alert_delivery() -> dict[str, Any]:
+async def test_alert_delivery(payload: AlertTestRequest | None = None) -> dict[str, Any]:
     async with ALERTS_LOCK:
         state = load_alert_state()
-        recipient = str(state["settings"].get("recipient") or "")
+        selected_id = payload.recipient_id if payload and payload.recipient_id else state["settings"].get("activeRecipientId")
+        recipient = recipient_address(state, selected_id)
         if not recipient:
-            raise HTTPException(status_code=400, detail="请先保存 iMessage 收件地址")
+            raise HTTPException(status_code=400, detail="请先选择 iMessage 提醒号码")
         if imsg_path() is None:
             raise HTTPException(status_code=503, detail="imsg 尚未安装完成")
         try:
@@ -923,9 +1029,8 @@ async def check_price_alerts() -> dict[str, Any]:
         if not state["settings"].get("enabled"):
             save_alert_state(state)
             return {"checked": 0, "sent": 0, "skipped": "disabled", **public_alert_status(state)}
-        recipient = str(state["settings"].get("recipient") or "")
-        if not recipient or imsg_path() is None:
-            state["status"]["lastError"] = "iMessage 收件地址或 imsg 尚未就绪"
+        if not state.get("recipients") or imsg_path() is None:
+            state["status"]["lastError"] = "iMessage 提醒号码或 imsg 尚未就绪"
             save_alert_state(state)
             return {"checked": 0, "sent": 0, "skipped": "not_ready", **public_alert_status(state)}
 
@@ -989,6 +1094,10 @@ async def check_price_alerts() -> dict[str, Any]:
                 watch["lastCheckedPrice"] = current_price
                 watch["purchaseUrl"] = current.get("purchaseUrl") or watch.get("purchaseUrl")
                 if abs(current_price - float(watch["lastPrice"])) < 0.01:
+                    continue
+                recipient = recipient_address(state, watch.get("recipientId"))
+                if not recipient:
+                    errors.append(f"{watch.get('id')}: RecipientMissing")
                     continue
                 try:
                     await asyncio.to_thread(

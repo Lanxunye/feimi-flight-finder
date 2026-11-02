@@ -9,6 +9,8 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   const offerId = request.nextUrl.searchParams.get("id") || "";
+  const recipientId = request.nextUrl.searchParams.get("recipientId") || "";
   if (!offerId) return Response.json({ error: "缺少收藏航班编号" }, { status: 400 });
-  return alertProxy(`/api/alerts/watch/${encodeURIComponent(offerId)}`, { method: "DELETE" });
+  const query = recipientId ? `?recipient_id=${encodeURIComponent(recipientId)}` : "";
+  return alertProxy(`/api/alerts/watch/${encodeURIComponent(offerId)}${query}`, { method: "DELETE" });
 }

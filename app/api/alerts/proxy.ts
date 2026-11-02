@@ -11,6 +11,9 @@ export async function alertProxy(path: string, init?: RequestInit) {
       intervalMinutes: 30,
       watchCount: 0,
       watchedOfferIds: [],
+      recipients: [],
+      activeRecipientId: null,
+      totalWatchCount: 0,
       message: "iMessage 价格提醒仅在飞觅桌面版运行",
     }, { status: init?.method && init.method !== "GET" ? 503 : 200 });
   }
